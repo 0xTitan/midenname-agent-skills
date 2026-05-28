@@ -1,0 +1,27 @@
+# Template for the Miden Name helper crate's manifest.
+#
+# `scripts/miden-name.sh` renders this into `Cargo.toml`, substituting
+# __MIDENNAME_CONTRACTS_DIR__ with $MIDENNAME_CONTRACTS_DIR, so the path
+# dependency points at the user's local midenid-contracts clone without
+# committing a machine-specific path. The generated Cargo.toml is gitignored.
+#
+# Dependency versions are kept in sync with midenid-contracts/Cargo.toml so the
+# shared types (AccountId, Word, Account, NetworkId) match across the path dep.
+
+[package]
+name = "miden-name-helper"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "miden-name-helper"
+path = "src/main.rs"
+
+[dependencies]
+midenname-contracts = { path = "__MIDENNAME_CONTRACTS_DIR__" }
+miden-client = { version = "0.14.4", features = ["testing", "tonic"] }
+miden-protocol = { version = "0.14.4", default-features = false, features = ["testing"] }
+miden-crypto = { version = "0.23.0", features = ["executable"] }
+tokio = { version = "1.46", features = ["rt-multi-thread", "net", "macros", "fs"] }
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1"
