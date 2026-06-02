@@ -41,28 +41,32 @@ terms are a planned extension.
 > the registry/faucet are redeployed frequently, so the values below are *current best
 > known*, not permanent. Always treat them as configurable and verify before paying.
 
-| Thing | Value (current best known) |
-|-------|----------------------------|
+| Thing | Value (live, fetched at runtime) |
+|-------|----------------------------------|
 | Node RPC (gRPC) | Miden testnet (`Endpoint::testnet()` / `https://rpc.testnet.miden.io`) |
-| Naming registry account | `0x3b9988ed8357964061b97efe6a42b5` (verified live) |
-| MIDEN payment-token faucet (pay registration with this) | `0x0a7d175ed63ec5200fb2ced86f6aa5` (verified: registry prices in this token) |
+| Naming registry account | from `https://miden.name/config.json` → `contractAddress` (fallback `0x88f63686037e63406bbb8f5d01adb0`) |
+| MIDEN payment-token faucet (pay registration with this) | from `https://miden.name/config.json` → `faucetAddress` (fallback `0x0a7d175ed63ec5200fb2ced86f6aa5`) |
 | Explorer | `https://testnet.midenscan.com` |
 
-Configure via `MIDENNAME_NAMING_ACCOUNT`, `MIDENNAME_FAUCET_ID`, `MIDENNAME_NETWORK`.
+The wrapper fetches the live values on each run (5s timeout, skipped if both vars are
+already set or `MIDENNAME_NO_FETCH=1`). Override with `MIDENNAME_NAMING_ACCOUNT` /
+`MIDENNAME_FAUCET_ID` / `MIDENNAME_CONFIG_URL`.
 
 > ⚠️ **The payment token is NOT the one in `midenid-backend/.env`.** That file lists
 > `MIDEN_FAUCET_ID_TESTNET=0x37d5…`, but the live registry actually prices in
 > `0x0a7d175ed63ec5200fb2ced86f6aa5` (the public testnet faucet token) — confirmed by a
-> real registration. Trust the registry's on-chain `naming::prices` map over config files.
+> real registration and matched by `miden.name/config.json` (`faucetAddress`).
 
-**Finding the current addresses** (in order of authority):
-1. The registry's on-chain state itself — `availability` resolves only against a live
+**Sources of address truth** (in order of authority):
+1. **`https://miden.name/config.json`** — the dApp's canonical live config. The wrapper
+   uses this by default.
+2. The registry's on-chain state itself — `availability` resolves only against a live
    registry; `register`'s "Insufficient balance" error prints the vault's actual faucet ids.
-2. `midenid-contracts/deployments/` — newest timestamped file holds `REGISTRY_CONTRACT_ID`
+3. `midenid-contracts/deployments/` — newest timestamped file holds `REGISTRY_CONTRACT_ID`
    and `PAYMENT_TOKEN_ID`.
-3. `midenid-backend/.env` / `midenid-frontend/.env` (can disagree with each other and
+4. `midenid-backend/.env` / `midenid-frontend/.env` (can disagree with each other and
    with the on-chain truth — see warning above).
-4. `midenid-contracts/ADDRESSES.md` (often stale).
+5. `midenid-contracts/ADDRESSES.md` (often stale).
 
 The faucet id used to pay **must** match the token the registry's prices were set in;
 if a registration is rejected on payment, that mismatch is the first thing to re-check.

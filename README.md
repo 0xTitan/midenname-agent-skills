@@ -147,7 +147,14 @@ Full walkthrough and the payment-token gotcha:
 
 ## Configuration
 
-Everything has a default — **no variable is required**.
+Everything has a default — **no variable is required**. The wrapper always knows the
+current testnet addresses because it fetches them at runtime.
+
+**Address resolution** (registry + payment-token faucet), in priority order:
+1. `$MIDENNAME_NAMING_ACCOUNT` / `$MIDENNAME_FAUCET_ID` (explicit override)
+2. **`https://miden.name/config.json`** (canonical live values, fetched on each run
+   unless both vars are already set; 5-second timeout)
+3. hardcoded fallbacks baked into the wrapper (used only if 1 and 2 are unavailable)
 
 | Env var | Purpose | Default |
 |---------|---------|---------|
@@ -156,14 +163,18 @@ Everything has a default — **no variable is required**.
 | `MIDENNAME_CONTRACTS_REF` | Branch/tag to auto-clone | `simple-naming-0.14` (not `main`) |
 | `MIDENNAME_CACHE_DIR` | Where to auto-clone | `~/.cache/midenname` |
 | `MIDENNAME_NETWORK` | `testnet` or `devnet` | `testnet` |
-| `MIDENNAME_NAMING_ACCOUNT` | Naming registry account id | `0x3b9988ed8357964061b97efe6a42b5` |
-| `MIDENNAME_FAUCET_ID` | MIDEN payment-token faucet id | `0x0a7d175ed63ec5200fb2ced86f6aa5` |
+| `MIDENNAME_CONFIG_URL` | Live-config endpoint | `https://miden.name/config.json` |
+| `MIDENNAME_NO_FETCH` | Set to `1` to skip the live-config fetch (offline/CI) | unset |
+| `MIDENNAME_NAMING_ACCOUNT` | Override the registry account id | live config (fallback `0x88f63686037e63406bbb8f5d01adb0`) |
+| `MIDENNAME_FAUCET_ID` | Override the MIDEN payment-token faucet id | live config (fallback `0x0a7d175ed63ec5200fb2ced86f6aa5`) |
 
 Explorer: https://testnet.midenscan.com
 
-> The registry prices in `0x0a7d…` (the public faucet token, **verified on-chain**) —
-> not the `0x37d5…` listed in `midenid-backend/.env`. Addresses change on redeploy;
-> trust the registry's on-chain `naming::prices` map. See `references/protocol.md`.
+> The registry prices in the public-faucet token (`0x0a7d…`) — **verified on-chain** —
+> not the `0x37d5…` listed in `midenid-backend/.env`. The registry account itself is
+> redeployed periodically; the live-config fetch keeps the wrapper pointed at the
+> current one without code changes. Trust the registry's on-chain `naming::prices` map.
+> See `references/protocol.md`.
 
 ## Troubleshooting
 

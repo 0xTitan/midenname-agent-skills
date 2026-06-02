@@ -28,10 +28,15 @@
 #                             which is an older version that will not compile)
 #   MIDENNAME_CACHE_DIR       Where to auto-clone (default ~/.cache/midenname)
 #   MIDENNAME_NETWORK         "testnet" (default) or "devnet"
-#   MIDENNAME_NAMING_ACCOUNT  Naming registry account id
-#                             (default 0x3b9988ed8357964061b97efe6a42b5)
-#   MIDENNAME_FAUCET_ID       MIDEN payment-token faucet id
-#                             (default 0x0a7d175ed63ec5200fb2ced86f6aa5)
+#   MIDENNAME_CONFIG_URL      Live-config endpoint (default https://miden.name/config.json)
+#   MIDENNAME_NO_FETCH        Set to 1 to skip the live-config fetch (use fallbacks)
+#   MIDENNAME_NAMING_ACCOUNT  Override the registry account id (else: live config, else fallback)
+#   MIDENNAME_FAUCET_ID       Override the payment-token faucet id (else: live config, else fallback)
+#
+# Addresses are resolved in priority order:
+#   1. $MIDENNAME_NAMING_ACCOUNT / $MIDENNAME_FAUCET_ID (explicit)
+#   2. https://miden.name/config.json (canonical live values)
+#   3. hardcoded fallbacks baked into this script (may become stale on redeploy)
 #
 # Funding a test account (one-time):
 #   1. create-account                         -> prints an address (mtst1...)
@@ -45,12 +50,45 @@
 set -euo pipefail
 
 NETWORK="${MIDENNAME_NETWORK:-testnet}"
-NAMING_ACCOUNT="${MIDENNAME_NAMING_ACCOUNT:-0x3b9988ed8357964061b97efe6a42b5}"
-# Token the registry prices in. Verified on-chain: registry 0x3b9988... prices in
-# 0x0a7d... (the PUBLIC testnet faucet token), which is what faucet.testnet.miden.io
-# and `miden-faucet-client` mint. (The backend .env's 0x37d5... is NOT this registry's
-# payment token.)
-FAUCET_ID="${MIDENNAME_FAUCET_ID:-0x0a7d175ed63ec5200fb2ced86f6aa5}"
+
+# Hardcoded fallbacks (kept current; used only if both the env var and the live
+# config fetch are unavailable). Token: 0x0a7d... is the PUBLIC testnet faucet
+# token, what the registry prices in — verified on-chain — and what
+# faucet.testnet.miden.io / `miden-faucet-client` mint.
+FALLBACK_NAMING_ACCOUNT="0x88f63686037e63406bbb8f5d01adb0"
+FALLBACK_FAUCET_ID="0x0a7d175ed63ec5200fb2ced86f6aa5"
+
+# Best-effort fetch of the canonical live config (miden.name/config.json).
+# Skips the network call when both env vars are already set or MIDENNAME_NO_FETCH=1.
+# Populates LIVE_NAMING_ACCOUNT and LIVE_FAUCET_ID on success; silent on failure.
+LIVE_NAMING_ACCOUNT=""; LIVE_FAUCET_ID=""
+fetch_live_config() {
+  [ -n "${MIDENNAME_NAMING_ACCOUNT:-}" ] && [ -n "${MIDENNAME_FAUCET_ID:-}" ] && return 0
+  [ "${MIDENNAME_NO_FETCH:-0}" = "1" ] && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local url="${MIDENNAME_CONFIG_URL:-https://miden.name/config.json}"
+  local json
+  json="$(curl -fsS --max-time 5 "$url" 2>/dev/null)" || return 0
+  LIVE_NAMING_ACCOUNT="$(printf '%s' "$json" \
+    | grep -oE '"contractAddress"[[:space:]]*:[[:space:]]*"0x[0-9a-fA-F]+"' \
+    | sed -E 's/.*"(0x[0-9a-fA-F]+)"$/\1/')"
+  LIVE_FAUCET_ID="$(printf '%s' "$json" \
+    | grep -oE '"faucetAddress"[[:space:]]*:[[:space:]]*"0x[0-9a-fA-F]+"' \
+    | sed -E 's/.*"(0x[0-9a-fA-F]+)"$/\1/')"
+}
+fetch_live_config
+
+NAMING_ACCOUNT="${MIDENNAME_NAMING_ACCOUNT:-${LIVE_NAMING_ACCOUNT:-$FALLBACK_NAMING_ACCOUNT}}"
+FAUCET_ID="${MIDENNAME_FAUCET_ID:-${LIVE_FAUCET_ID:-$FALLBACK_FAUCET_ID}}"
+
+# Note the source on stderr so it's easy to debug a wrong address.
+if [ -n "${MIDENNAME_NAMING_ACCOUNT:-}" ] && [ -n "${MIDENNAME_FAUCET_ID:-}" ]; then
+  : # fully overridden, no fetch needed
+elif [ -n "$LIVE_NAMING_ACCOUNT" ] && [ -n "$LIVE_FAUCET_ID" ]; then
+  echo "note: using live config from ${MIDENNAME_CONFIG_URL:-https://miden.name/config.json}" >&2
+else
+  echo "note: live config unavailable; using built-in fallback addresses" >&2
+fi
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -61,7 +99,7 @@ HELPER_DIR="$REPO_ROOT/tools/miden-name"
 
 # Show help without requiring any setup.
 case "${1:-}" in
-  ""|-h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+  ""|-h|--help) sed -n '2,49p' "$0"; exit 0 ;;
 esac
 
 # Resolve the contracts clone with zero required setup, in priority order:
