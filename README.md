@@ -125,36 +125,56 @@ $S availability myname                   # → available=false (wait a few secon
 Full walkthrough and the payment-token gotcha:
 [`skills/register-domain/references/setup.md`](skills/register-domain/references/setup.md).
 
-## Installing the skills into Claude Code
+## Install on a new machine (step by step)
 
-1. **Copy the skill folders** into a skills directory Claude Code loads:
+1. **Install Rust and git.** Rust (`cargo`) builds the helper crate and the contracts
+   CLI; git clones the repos.
+
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust (cargo)
+   # git is usually preinstalled — install it from your package manager if not
+   ```
+
+2. **Clone this repo and keep it.** The skills call its `scripts/miden-name.sh`, so the
+   clone must stay on disk (it is *this* repo you clone — not the contracts repo, which
+   is fetched automatically later).
+
+   ```bash
+   git clone https://github.com/Digine-Labs/midenname-agent-skills.git ~/midenname-agent-skills
+   ```
+
+3. **Copy the skill folders** into a directory Claude Code loads:
 
    ```bash
    mkdir -p ~/.claude/skills
-   cp -r skills/* ~/.claude/skills/
+   cp -r ~/midenname-agent-skills/skills/* ~/.claude/skills/
    ```
 
-2. **Tell the skill where the wrapper is** (this is the only var that matters, and only
-   because the agent needs the script's path). ⚠️ Claude Code's Bash tool does **not**
-   source `~/.zshrc` / `~/.bashrc`, so vars set there read as **empty** inside skills —
-   put it in `~/.claude/settings.json` under `env` (injected into every Bash call), then
-   start a new session:
+4. **Point the skills at the wrapper.** ⚠️ Claude Code's Bash tool does **not** source
+   `~/.zshrc` / `~/.bashrc`, so a var set there reads as **empty** inside skills. Add
+   `MIDENNAME_SKILLS_DIR` under `env` in `~/.claude/settings.json`, pointing at the
+   clone from step 2. **Merge** into the file if it already exists — don't overwrite it:
 
    ```json
    {
      "env": {
-       "MIDENNAME_SKILLS_DIR": "/abs/path/to/midenname-agent-skills"
+       "MIDENNAME_SKILLS_DIR": "/Users/<you>/midenname-agent-skills"
      }
    }
    ```
 
-   The contracts clone is handled automatically (auto-cloned/cached), so
-   `MIDENNAME_CONTRACTS_DIR` is **optional** — set it only to reuse an existing clone.
-   If you skip `MIDENNAME_SKILLS_DIR` too, the skill instructs the agent to locate
-   `miden-name.sh` with `find`. Verify any var with `echo $VAR` *inside a Bash tool
-   call* — not your terminal.
+5. **Start a new Claude Code session** (so it loads the new skills + env), then ask:
+   *"Is alice.miden available?"* or *"Register foo.miden from my account."*
 
-3. Then ask, e.g., *"Is alice.miden available?"* or *"Register foo.miden from my account."*
+On the **first run**, the wrapper auto-clones `midenid-contracts` (branch
+`simple-naming-0.14`) into `~/.cache/midenname` and builds the helper crate — slow
+once, then cached. You do **not** need to clone the contracts repo or set any address
+env var yourself.
+
+> Verify the var with `echo $MIDENNAME_SKILLS_DIR` **inside a Bash tool call** — not
+> your terminal. If it's empty, the skill falls back to locating `miden-name.sh` with
+> `find`, but setting it is more reliable. `MIDENNAME_CONTRACTS_DIR` stays **optional**
+> (set it only to reuse an existing contracts clone).
 
 ## Configuration
 
