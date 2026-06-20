@@ -125,7 +125,7 @@ $S availability myname                   # → available=false (wait a few secon
 Full walkthrough and the payment-token gotcha:
 [`skills/register-domain/references/setup.md`](skills/register-domain/references/setup.md).
 
-## Install on a new machine (step by step)
+## How to install into Claude
 
 1. **Install Rust and git.** Rust (`cargo`) builds the helper crate and the contracts
    CLI; git clones the repos.
