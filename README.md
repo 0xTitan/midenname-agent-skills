@@ -64,8 +64,19 @@ midenname-agent-skills/
 | `availability <name>` | helper crate | read-only; free |
 | `create-account` | helper crate | new wallet, key → `./keystore`, prints address |
 | `balance <account>` | helper crate | balance of the MIDEN payment token |
-| `register <name> --account <id>` | contracts CLI | spends MIDEN, submits tx |
+| `register <name> --account <id> [--sign local\|web]` | contracts CLI (local) / helper crate + relay (web) | spends MIDEN, submits tx |
 | `consume <account>` | contracts CLI | pull a faucet mint note into the account |
+
+`register` has two signing modes (default `local`):
+
+- **`--sign local`** — the local `./keystore` key signs and submits (unattended;
+  good for airdrop loops). This is the current, fully working path.
+- **`--sign web`** — the wrapper builds the **unsigned** transaction (no key used)
+  and hands it to a relay + browser page so you sign in **your own wallet**; the key
+  never touches the agent. The agent side is implemented; it requires the relay and
+  `/sign/:id` page from [`design/device-flow-signing.md`](design/device-flow-signing.md)
+  to be deployed (set `MIDENNAME_RELAY_URL`). Until then it errors cleanly and tells
+  you to use `--sign local`.
 
 ## Requirements
 
@@ -167,6 +178,8 @@ current testnet addresses because it fetches them at runtime.
 | `MIDENNAME_NO_FETCH` | Set to `1` to skip the live-config fetch (offline/CI) | unset |
 | `MIDENNAME_NAMING_ACCOUNT` | Override the registry account id | live config (fallback `0x88f63686037e63406bbb8f5d01adb0`) |
 | `MIDENNAME_FAUCET_ID` | Override the MIDEN payment-token faucet id | live config (fallback `0x0a7d175ed63ec5200fb2ced86f6aa5`) |
+| `MIDENNAME_SIGN_MODE` | Default `register` signing mode: `local` or `web` | `local` |
+| `MIDENNAME_RELAY_URL` | Sign-request relay used by `--sign web` | `https://api.miden.name` |
 
 Explorer: https://testnet.midenscan.com
 

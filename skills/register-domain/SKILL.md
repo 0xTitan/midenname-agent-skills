@@ -57,6 +57,23 @@ underlying CLI:
 - builds and submits the `register_name` note,
 - prints MidenScan links for the note and transaction.
 
+## Signing modes
+
+`register` accepts `--sign local` (default) or `--sign web`:
+
+- **`--sign local`** (default) — the key in the contracts clone's `./keystore` signs
+  and submits. This is the working path; use it unless the user asks to sign with
+  their own wallet. Prerequisites above (key in keystore, funded account) apply.
+- **`--sign web`** — the wrapper builds the **unsigned** transaction (no key
+  required or used) and posts it to a relay; the user opens the printed URL and
+  signs in **their own browser wallet**. The key never reaches the agent. This is
+  the device-flow design in `design/device-flow-signing.md`; the agent side is
+  implemented, but it needs the relay + `/sign/:id` page deployed
+  (`MIDENNAME_RELAY_URL`). If the relay is unreachable the command errors and asks
+  you to use `--sign local` — when that happens, fall back to `--sign local` (with a
+  keystore account) or tell the user the web flow isn't available yet. Do **not**
+  treat a relay error as a registration failure of the name itself.
+
 ## After registering
 
 - Report the transaction / note IDs and the MidenScan link the CLI prints.

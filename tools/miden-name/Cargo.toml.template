@@ -5,8 +5,15 @@
 # dependency points at the user's local midenid-contracts clone without
 # committing a machine-specific path. The generated Cargo.toml is gitignored.
 #
-# Dependency versions are kept in sync with midenid-contracts/Cargo.toml so the
-# shared types (AccountId, Word, Account, NetworkId) match across the path dep.
+# Dependency versions are EXACT-pinned (`=x.y.z`) to match midenid-contracts'
+# Cargo.lock. This matters beyond the shared types (AccountId, Word, Account,
+# NetworkId): prepare-register compiles the contracts' register_name.masm, and a
+# floated assembler (miden-assembly 0.22.4 via caret ranges) rejects it with
+# "library modules cannot contain begin..end". The exact pins below cover the
+# DIRECT deps; the wrapper additionally SEEDS this crate's Cargo.lock from the
+# contracts crate's Cargo.lock (see scripts/miden-name.sh: seed_helper_lock) so the
+# TRANSITIVE miden crates (miden-standards, miden-objects, miden-assembly, ...)
+# resolve to the identical versions the contracts crate was built against.
 
 [package]
 name = "miden-name-helper"
@@ -19,9 +26,10 @@ path = "src/main.rs"
 
 [dependencies]
 midenname-contracts = { path = "__MIDENNAME_CONTRACTS_DIR__" }
-miden-client = { version = "0.14.4", features = ["testing", "tonic"] }
-miden-protocol = { version = "0.14.4", default-features = false, features = ["testing"] }
-miden-crypto = { version = "0.23.0", features = ["executable"] }
+miden-client = { version = "=0.14.4", features = ["testing", "tonic"] }
+miden-protocol = { version = "=0.14.4", default-features = false, features = ["testing"] }
+miden-crypto = { version = "=0.23.0", features = ["executable"] }
 tokio = { version = "1.46", features = ["rt-multi-thread", "net", "macros", "fs"] }
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1"
+hex = "0.4"

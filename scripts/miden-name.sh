@@ -12,8 +12,13 @@
 #         midenid-contracts helpers to read/build chain state.
 #
 #   register <name> --account <id> register/claim a name (spends MIDEN, submits tx)
+#       --sign local (default)     sign with the local ./keystore key (unattended)
+#       --sign web                 propose the tx and sign in your own browser wallet
+#                                  (device flow; see design/device-flow-signing.md)
 #   consume <account>              consume pending notes (e.g. a faucet mint) into <account>
-#       ^ these run the existing midenid-contracts CLI.
+#       ^ register --sign local and consume run the existing midenid-contracts CLI;
+#         register --sign web builds the unsigned tx via the helper crate and hands
+#         it to the relay + browser wallet (no local key is used or required).
 #
 # Zero required setup: the contracts clone is resolved automatically —
 #   1. $MIDENNAME_CONTRACTS_DIR if set, else
@@ -32,6 +37,8 @@
 #   MIDENNAME_NO_FETCH        Set to 1 to skip the live-config fetch (use fallbacks)
 #   MIDENNAME_NAMING_ACCOUNT  Override the registry account id (else: live config, else fallback)
 #   MIDENNAME_FAUCET_ID       Override the payment-token faucet id (else: live config, else fallback)
+#   MIDENNAME_SIGN_MODE       Default signing mode for `register`: local (default) or web
+#   MIDENNAME_RELAY_URL       Sign-request relay for --sign web (default https://api.miden.name)
 #
 # Addresses are resolved in priority order:
 #   1. $MIDENNAME_NAMING_ACCOUNT / $MIDENNAME_FAUCET_ID (explicit)
@@ -50,6 +57,8 @@
 set -euo pipefail
 
 NETWORK="${MIDENNAME_NETWORK:-testnet}"
+SIGN_MODE="${MIDENNAME_SIGN_MODE:-local}"
+RELAY_URL="${MIDENNAME_RELAY_URL:-https://api.miden.name}"
 
 # Hardcoded fallbacks (kept current; used only if both the env var and the live
 # config fetch are unavailable). Token: 0x0a7d... is the PUBLIC testnet faucet
@@ -163,19 +172,131 @@ render_helper_manifest() {
   fi
 }
 
+# Seed the helper crate's Cargo.lock from the contracts crate's Cargo.lock so the
+# shared miden crates — including transitives like miden-standards and the MASM
+# assembler — resolve to the exact versions the contracts crate was built against.
+# Without this, cargo floats them (e.g. miden-assembly 0.22.4) and prepare-register
+# fails to compile register_name.masm. Cargo extends the seeded lock with the
+# helper's extra crates (clap, hex, ...) on first build; we only seed when missing.
+seed_helper_lock() {
+  local hl="$HELPER_DIR/Cargo.lock"
+  local cl="$CONTRACTS_DIR/Cargo.lock"
+  [ -f "$hl" ] && return 0
+  [ -f "$cl" ] && cp "$cl" "$hl"
+}
+
 # Run the helper crate. Runs from the contracts dir so it shares the same synced
 # ./store.sqlite3 and ./keystore that the contracts CLI uses (one keystore for all).
 run_helper() {
   render_helper_manifest
+  seed_helper_lock
   cd "$CONTRACTS_DIR"
   exec cargo run --quiet --release --manifest-path "$HELPER_DIR/Cargo.toml" -- \
     "${NET_FLAG[@]}" "$@"
+}
+
+# Run the helper crate and CAPTURE its stdout (no exec), for commands the wrapper
+# needs to post-process — e.g. prepare-register. stderr (build noise, warnings)
+# still flows to the user's terminal.
+capture_helper() {
+  render_helper_manifest
+  seed_helper_lock
+  ( cd "$CONTRACTS_DIR" && cargo run --quiet --release --manifest-path "$HELPER_DIR/Cargo.toml" -- \
+      "${NET_FLAG[@]}" "$@" )
 }
 
 # Run the existing contracts CLI.
 run_contracts() {
   cd "$CONTRACTS_DIR"
   exec cargo run --quiet --release -- "${NET_FLAG[@]}" "$@"
+}
+
+# Extract a JSON string field's value without jq (consistent with fetch_live_config).
+json_str() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" <<<"$1"; }
+# Extract a JSON number field's value without jq.
+json_num() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" <<<"$1"; }
+
+# register --sign web: build the unsigned tx, hand it to the relay, print the
+# user URL, and short-poll until the user signs in their browser wallet.
+# Implements the agent side of design/device-flow-signing.md. No local key is used.
+register_web() {
+  local name="$1" account="$2"
+  command -v curl >/dev/null 2>&1 || die "web signing needs curl (not found)."
+
+  echo "note: building the unsigned register transaction (no key used)..." >&2
+  local out
+  out="$(capture_helper prepare-register \
+    --name "$name" --account "$account" \
+    --naming-account "$NAMING_ACCOUNT" --faucet-id "$FAUCET_ID")" \
+    || die "failed to prepare the register transaction."
+
+  # Show the human-readable summary block; hide the machine lines.
+  printf '%s\n' "$out" | sed '/^RESULT /d;/^TX_REQUEST_HEX=/d'
+
+  local tx_hex result_line price note_id
+  tx_hex="$(sed -n 's/^TX_REQUEST_HEX=//p' <<<"$out")"
+  [ -n "$tx_hex" ] || die "could not extract the prepared transaction from helper output."
+  result_line="$(grep '^RESULT prepared ' <<<"$out" || true)"
+  price="$(sed -n 's/.* price=\([0-9]*\).*/\1/p' <<<"$result_line")"
+  note_id="$(sed -n 's/.* note_id=\([^ ]*\).*/\1/p' <<<"$result_line")"
+
+  # POST body. All values are hex / digits / [a-z0-9] — no JSON escaping needed.
+  local body
+  body="$(printf '{"kind":"register-name@v1","unsigned_tx_hex":"%s","summary":{"name":"%s","sender_account":"%s","naming_account":"%s","faucet_id":"%s","price":"%s"}}' \
+    "$tx_hex" "$name" "$account" "$NAMING_ACCOUNT" "$FAUCET_ID" "$price")"
+
+  echo "note: submitting sign-request to relay $RELAY_URL ..." >&2
+  local resp
+  resp="$(curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
+    -d "$body" "$RELAY_URL/v1/sign-requests" 2>/dev/null)" \
+    || die "could not reach the signing relay at $RELAY_URL (relay not deployed yet?). Use --sign local, or set MIDENNAME_RELAY_URL to a running relay."
+
+  local id user_url poll_url expires_in
+  id="$(json_str "$resp" id)"
+  user_url="$(json_str "$resp" user_url)"
+  expires_in="$(json_num "$resp" expires_in)"
+  [ -n "$id" ] || die "relay response missing id: $resp"
+  [ -n "$user_url" ] || die "relay response missing user_url: $resp"
+  # Build the poll URL from the relay base we already used — always correct. The
+  # relay deliberately does not return one (it shouldn't need to know its own URL).
+  poll_url="$RELAY_URL/v1/sign-requests/$id"
+  expires_in="${expires_in:-300}"
+
+  echo ""
+  echo "================================================="
+  echo "Open this URL in a browser with your Miden wallet and approve the tx:"
+  echo ""
+  echo "    $user_url"
+  echo ""
+  [ -n "$id" ] && echo "Request id: $id"
+  echo "Expires in ${expires_in}s. The key never leaves your wallet."
+  echo "================================================="
+  echo ""
+
+  # Short-poll (every 3s) until a terminal status or expiry.
+  local deadline=$(( $(date +%s) + expires_in )) status pr tx_hash
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    sleep 3
+    pr="$(curl -fsS --max-time 10 "$poll_url" 2>/dev/null)" || { echo "note: poll failed, retrying..." >&2; continue; }
+    status="$(json_str "$pr" status)"
+    case "$status" in
+      signed)
+        tx_hash="$(json_str "$pr" tx_hash)"
+        echo ""
+        echo "Signed in wallet."
+        # The wallet returns its internal tx id (not the on-chain tx hash), so link to
+        # the register NOTE instead — that has a real on-chain id MidenScan can resolve.
+        # The registration lands once the registry network account consumes this note
+        # (usually within a few minutes).
+        [ -n "$note_id" ] && echo "View register note on MidenScan: https://testnet.midenscan.com/note/$note_id"
+        echo "RESULT signed name=$name note_id=$note_id tx_hash=$tx_hash"
+        return 0 ;;
+      rejected) die "the user rejected the transaction in their wallet." ;;
+      expired)  die "the sign request expired before it was approved." ;;
+    esac
+    echo "  waiting for signature... (status=${status:-pending})" >&2
+  done
+  die "timed out waiting for the signature (request expired)."
 }
 
 cmd="${1:-}"; shift || true
@@ -195,7 +316,7 @@ case "$cmd" in
     ;;
   register)
     name="${1:-}"; shift || true
-    [ -n "$name" ] || die "usage: miden-name.sh register <name> --account <id>"
+    [ -n "$name" ] || die "usage: miden-name.sh register <name> --account <id> [--sign local|web]"
     name="$(normalize_name "$name")"
     account=""
     while [ $# -gt 0 ]; do
@@ -203,15 +324,28 @@ case "$cmd" in
         --account) account="$2"; shift 2 ;;
         --faucet-id) FAUCET_ID="$2"; shift 2 ;;
         --naming-account) NAMING_ACCOUNT="$2"; shift 2 ;;
+        --sign) SIGN_MODE="$2"; shift 2 ;;
         *) die "unknown argument: $1" ;;
       esac
     done
     [ -n "$account" ] || die "register requires --account <your_account_id>"
-    run_contracts register \
-      --account "$account" \
-      --naming-account "$NAMING_ACCOUNT" \
-      --faucet-id "$FAUCET_ID" \
-      --name "$name"
+    case "$SIGN_MODE" in
+      local)
+        # Local keystore signs + submits (unattended; default).
+        run_contracts register \
+          --account "$account" \
+          --naming-account "$NAMING_ACCOUNT" \
+          --faucet-id "$FAUCET_ID" \
+          --name "$name"
+        ;;
+      web)
+        # Propose the tx; the user signs in their own browser wallet.
+        register_web "$name" "$account"
+        ;;
+      *)
+        die "unknown --sign mode: $SIGN_MODE (expected: local | web)"
+        ;;
+    esac
     ;;
   consume)
     account="${1:-}"; shift || true
